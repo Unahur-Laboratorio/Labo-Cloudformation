@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ALB + 2x EC2 (AL2023) con httpd via User Data descargado de GitHub raw; EC2 solo HTTP desde ALB'
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC donde crear ALB y EC2
+  Subnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet pública #1
+  Subnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet pública #2
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.nano
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t2.micro
+    Description: Tipo de instancia para las EC2
+  GitRawUserDataUrl:
+    Type: String
+    Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/main/scripts/user-data.sh
+    Description: URL raw (pública) al script de User Data en GitHub
+
+Mappings:
+  AMI:
+    AL2023:
+      X86: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+
+Resources:
+  # SG del ALB (HTTP público)
+  ALBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG del ALB (permite HTTP desde Internet)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  # SG de las EC2 (HTTP solo desde ALB)
+  WebSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG de web servers (HTTP solo desde ALB)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSG
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  # ALB público
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${AWS::StackName}-alb'
+      Scheme: internet-facing
+      Subnets:
+        - !Ref Subnet1Id
+        - !Ref Subnet2Id
+      SecurityGroups:
+        - !Ref ALBSG
+      Type: application
+      IpAddressType: ipv4
+
+  # Target Group
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-tg'
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      Matcher:
+        HttpCode: '200-399'
+
+  # Listener HTTP -> TG
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+  # AMI de Amazon Linux 2023 (SSM)
+  AL2023AMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: !FindInMap [AMI, AL2023, X86]
+
+  # EC2 #1
+  WebServer1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AL2023AMI
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref Subnet1Id
+      SecurityGroupIds:
+        - !Ref WebSG
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf -y install curl
+          curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
+          chmod +x /tmp/user-data.sh
+          /tmp/user-data.sh
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-web1'
+
+  # EC2 #2
+  WebServer2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AL2023AMI
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref Subnet2Id
+      SecurityGroupIds:
+        - !Ref WebSG
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf -y install curl
+          curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
+          chmod +x /tmp/user-data.sh
+          /tmp/user-data.sh
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-web2'
+
+  # Attach al TG
+  AttachWeb1:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroupAttachment
+    Properties:
+      TargetGroupArn: !Ref WebTargetGroup
+      TargetId: !Ref WebServer1
+      Port: 80
+
+  AttachWeb2:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroupAttachment
+    Properties:
+      TargetGroupArn: !Ref WebTargetGroup
+      TargetId: !Ref WebServer2
+      Port: 80
+
+Outputs:
+  ALBDNSName:
+    Description: DNS público del ALB
+    Value: !GetAtt ALB.DNSName
+  TargetGroupArn:
+    Description: ARN del Target Group
+    Value: !Ref WebTargetGroup
+  WebSGId:
+    Description: Security Group de las instancias web
+    Value: !Ref WebSG
+  ALBSGId:
+    Description: Security Group del ALB
+    Value: !Ref ALBSG
