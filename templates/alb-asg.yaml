@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ALB + Auto Scaling Group (AL2023) con target tracking por ALB RequestCountPerTarget. Desired=2, Max=4. EC2 con IP pública y HTTP solo desde ALB.'
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC existente
+  Subnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet pública #1 (ALB/ASG)
+  Subnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet pública #2 (ALB/ASG)
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.nano, t3.micro, t3.small, t3.medium, t2.micro]
+    Description: Tipo de instancia
+
+  AmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+    Description: SSM parameter path de la AMI
+
+  GitRawUserDataUrl:
+    Type: String
+    Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/main/scripts/user-data.sh
+    Description: URL raw pública del script de User Data en GitHub
+
+  TargetReqPerTarget:
+    Type: Number
+    Default: 25
+    MinValue: 1
+    Description: ALB RequestCountPerTarget objetivo para la policy (bajo para demo)
+
+Resources:
+  # SGs
+  ALBSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG del ALB (HTTP desde Internet)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  WebSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG de web (HTTP solo desde ALB)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSG
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  # ALB + TG + Listener
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${AWS::StackName}-alb'
+      Scheme: internet-facing
+      Subnets: [!Ref Subnet1Id, !Ref Subnet2Id]
+      SecurityGroups: [!Ref ALBSG]
+      Type: application
+      IpAddressType: ipv4
+
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${AWS::StackName}-tg'
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      Matcher: { HttpCode: '200-399' }
+
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+  # Launch Template (fuerza IP pública, incluye UserData con retries)
+  WebLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${AWS::StackName}-lt'
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups: [ !Ref WebSG ]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euxo pipefail
+            retry() { n=0; until [ $n -ge 5 ]; do "$@" && break || { n=$((n+1)); sleep 5; }; done; }
+            retry dnf -y install curl httpd
+            retry curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
+            chmod +x /tmp/user-data.sh
+            /tmp/user-data.sh
+
+  # Auto Scaling Group (Desired=2, Max=4)
+  WebASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: [!Ref Subnet1Id, !Ref Subnet2Id]
+      MinSize: '2'
+      MaxSize: '4'
+      DesiredCapacity: '2'
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 180
+      TargetGroupARNs: [!Ref WebTargetGroup]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebLaunchTemplate
+        Version: !GetAtt WebLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-asg'
+          PropagateAtLaunch: true
+
+  # Target tracking por ALB RequestCountPerTarget
+  ASGScalingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref WebASG
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Sub '${ALB.LoadBalancerFullName}/${WebTargetGroup.TargetGroupFullName}'
+        TargetValue: !Ref TargetReqPerTarget
+        DisableScaleIn: false
+
+Outputs:
+  ALBDNSName:
+    Description: DNS público del ALB
+    Value: !GetAtt ALB.DNSName
+  ASGName:
+    Description: Nombre del Auto Scaling Group
+    Value: !Ref WebASG
