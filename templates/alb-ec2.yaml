@@ -11,15 +11,19 @@ Parameters:
   Subnet2Id:
     Type: AWS::EC2::Subnet::Id
     Description: Subnet pública #2 existente
+
   InstanceType:
     Type: String
     Default: t3.micro
     AllowedValues: [t3.nano, t3.micro, t3.small, t3.medium, t2.micro]
     Description: Tipo de instancia para las EC2
-  AMISSMPath:
-    Type: String
+
+  # CORRECTO: parámetro SSM que devuelve la AMI (con Default = path literal)
+  AmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
-    Description: AMI (SSM path) a utilizar
+    Description: SSM parameter path de la AMI (cambiar si querés otra imagen)
+
   GitRawUserDataUrl:
     Type: String
     Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/main/scripts/user-data.sh
@@ -95,16 +99,11 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref WebTargetGroup
 
-  # AMI (SSM) para Amazon Linux 2023
-  AMIFromSSM:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: !Ref AMISSMPath
-
   # EC2 #1
   WebServer1:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref AMIFromSSM
+      ImageId: !Ref AmiId            # <-- usar el parámetro AmiId
       InstanceType: !Ref InstanceType
       SubnetId: !Ref Subnet1Id
       SecurityGroupIds: [!Ref WebSG]
@@ -122,7 +121,7 @@ Resources:
   WebServer2:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref AMIFromSSM
+      ImageId: !Ref AmiId            # <-- usar el parámetro AmiId
       InstanceType: !Ref InstanceType
       SubnetId: !Ref Subnet2Id
       SecurityGroupIds: [!Ref WebSG]
