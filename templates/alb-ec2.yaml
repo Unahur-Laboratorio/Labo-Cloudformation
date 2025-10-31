@@ -1,35 +1,29 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'ALB + 2x EC2 (AL2023) con httpd via User Data descargado de GitHub raw; EC2 solo HTTP desde ALB'
+Description: 'ALB + 2x EC2 (AL2023) via User Data desde GitHub raw; EC2 solo HTTP desde ALB (parametrizado)'
 
 Parameters:
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Description: VPC donde crear ALB y EC2
+    Description: VPC existente donde crear ALB y EC2
   Subnet1Id:
     Type: AWS::EC2::Subnet::Id
-    Description: Subnet pública #1
+    Description: Subnet pública #1 existente
   Subnet2Id:
     Type: AWS::EC2::Subnet::Id
-    Description: Subnet pública #2
+    Description: Subnet pública #2 existente
   InstanceType:
     Type: String
     Default: t3.micro
-    AllowedValues:
-      - t3.nano
-      - t3.micro
-      - t3.small
-      - t3.medium
-      - t2.micro
+    AllowedValues: [t3.nano, t3.micro, t3.small, t3.medium, t2.micro]
     Description: Tipo de instancia para las EC2
+  AMISSMPath:
+    Type: String
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+    Description: AMI (SSM path) a utilizar
   GitRawUserDataUrl:
     Type: String
     Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/main/scripts/user-data.sh
-    Description: URL raw (pública) al script de User Data en GitHub
-
-Mappings:
-  AMI:
-    AL2023:
-      X86: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
+    Description: URL raw pública del script de User Data en GitHub (no es necesario pasarla por parámetro)
 
 Resources:
   # SG del ALB (HTTP público)
@@ -47,7 +41,7 @@ Resources:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  # SG de las EC2 (HTTP solo desde ALB)
+  # SG de EC2 (HTTP solo desde ALB)
   WebSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -88,10 +82,9 @@ Resources:
       HealthCheckEnabled: true
       HealthCheckPath: /
       HealthCheckProtocol: HTTP
-      Matcher:
-        HttpCode: '200-399'
+      Matcher: { HttpCode: '200-399' }
 
-  # Listener HTTP -> TG
+  # Listener HTTP → TG
   HTTPListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -102,20 +95,19 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref WebTargetGroup
 
-  # AMI de Amazon Linux 2023 (SSM)
-  AL2023AMI:
+  # AMI (SSM) para Amazon Linux 2023
+  AMIFromSSM:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: !FindInMap [AMI, AL2023, X86]
+    Default: !Ref AMISSMPath
 
   # EC2 #1
   WebServer1:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref AL2023AMI
+      ImageId: !Ref AMIFromSSM
       InstanceType: !Ref InstanceType
       SubnetId: !Ref Subnet1Id
-      SecurityGroupIds:
-        - !Ref WebSG
+      SecurityGroupIds: [!Ref WebSG]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -124,19 +116,16 @@ Resources:
           curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
           chmod +x /tmp/user-data.sh
           /tmp/user-data.sh
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-web1'
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-web1' }]
 
   # EC2 #2
   WebServer2:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref AL2023AMI
+      ImageId: !Ref AMIFromSSM
       InstanceType: !Ref InstanceType
       SubnetId: !Ref Subnet2Id
-      SecurityGroupIds:
-        - !Ref WebSG
+      SecurityGroupIds: [!Ref WebSG]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -145,9 +134,7 @@ Resources:
           curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
           chmod +x /tmp/user-data.sh
           /tmp/user-data.sh
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-web2'
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-web2' }]
 
   # Attach al TG
   AttachWeb1:
