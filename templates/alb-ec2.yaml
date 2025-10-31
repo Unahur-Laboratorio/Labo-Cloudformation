@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'ALB + 2x EC2 (AL2023) via User Data desde GitHub raw; EC2 solo HTTP desde ALB (parametrizado)'
+Description: 'ALB + 2x EC2 (AL2023) con UserData desde GitHub; EC2 con IP pública y HTTP solo desde ALB (parametrizado)'
 
 Parameters:
   VpcId:
@@ -67,14 +67,17 @@ Resources:
       Type: application
       IpAddressType: ipv4
 
-  # EC2 #1 y #2 primero (para poder referenciarlas en Targets)
+  # EC2 con IP pública (NetworkInterfaces)
   WebServer1:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
-      SubnetId: !Ref Subnet1Id
-      SecurityGroupIds: [!Ref WebSG]
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref Subnet1Id
+          GroupSet: [ !Ref WebSG ]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -90,8 +93,11 @@ Resources:
     Properties:
       ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
-      SubnetId: !Ref Subnet2Id
-      SecurityGroupIds: [!Ref WebSG]
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref Subnet2Id
+          GroupSet: [ !Ref WebSG ]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -114,7 +120,7 @@ Resources:
       HealthCheckPath: /
       HealthCheckProtocol: HTTP
       Matcher: { HttpCode: '200-399' }
-      Targets:                                # <<< registra las EC2 aquí
+      Targets:
         - Id: !Ref WebServer1
           Port: 80
         - Id: !Ref WebServer2
