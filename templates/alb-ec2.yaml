@@ -22,7 +22,7 @@ Parameters:
     Description: SSM parameter path de la AMI (cambiar para otra imagen)
   GitRawUserDataUrl:
     Type: String
-    Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/main/scripts/user-data.sh
+    Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/refs/heads/main/scripts/user-data.sh
     Description: URL raw pública del script de User Data en GitHub
 
 Resources:
