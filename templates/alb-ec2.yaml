@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'ALB + 2x EC2 (AL2023) con UserData desde GitHub; EC2 con IP pública y HTTP solo desde ALB (parametrizado)'
+Description: 'ALB + 2x EC2 (AL2023) via User Data desde GitHub raw; EC2 solo HTTP desde ALB (parametrizado)'
 
 Parameters:
   VpcId:
@@ -22,7 +22,7 @@ Parameters:
     Description: SSM parameter path de la AMI (cambiar para otra imagen)
   GitRawUserDataUrl:
     Type: String
-    Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/refs/heads/main/scripts/user-data.sh
+    Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/main/scripts/user-data.sh
     Description: URL raw pública del script de User Data en GitHub
 
 Resources:
@@ -67,23 +67,21 @@ Resources:
       Type: application
       IpAddressType: ipv4
 
-  # EC2 con IP pública (NetworkInterfaces)
+  # EC2 primero (para poder referenciarlas en Targets)
   WebServer1:
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
-      NetworkInterfaces:
-        - AssociatePublicIpAddress: true
-          DeviceIndex: 0
-          SubnetId: !Ref Subnet1Id
-          GroupSet: [ !Ref WebSG ]
+      SubnetId: !Ref Subnet1Id
+      SecurityGroupIds: [!Ref WebSG]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -euxo pipefail
-          dnf -y install curl
-          curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
+          retry() { n=0; until [ $n -ge 5 ]; do "$@" && break || { n=$((n+1)); sleep 5; }; done; }
+          retry dnf -y install curl httpd
+          retry curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
           chmod +x /tmp/user-data.sh
           /tmp/user-data.sh
       Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-web1' }]
@@ -93,17 +91,15 @@ Resources:
     Properties:
       ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
-      NetworkInterfaces:
-        - AssociatePublicIpAddress: true
-          DeviceIndex: 0
-          SubnetId: !Ref Subnet2Id
-          GroupSet: [ !Ref WebSG ]
+      SubnetId: !Ref Subnet2Id
+      SecurityGroupIds: [!Ref WebSG]
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -euxo pipefail
-          dnf -y install curl
-          curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
+          retry() { n=0; until [ $n -ge 5 ]; do "$@" && break || { n=$((n+1)); sleep 5; }; done; }
+          retry dnf -y install curl httpd
+          retry curl -fsSL ${GitRawUserDataUrl} -o /tmp/user-data.sh
           chmod +x /tmp/user-data.sh
           /tmp/user-data.sh
       Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-web2' }]
