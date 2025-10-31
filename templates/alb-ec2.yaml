@@ -11,26 +11,21 @@ Parameters:
   Subnet2Id:
     Type: AWS::EC2::Subnet::Id
     Description: Subnet pública #2 existente
-
   InstanceType:
     Type: String
     Default: t3.micro
     AllowedValues: [t3.nano, t3.micro, t3.small, t3.medium, t2.micro]
     Description: Tipo de instancia para las EC2
-
-  # CORRECTO: parámetro SSM que devuelve la AMI (con Default = path literal)
   AmiId:
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
-    Description: SSM parameter path de la AMI (cambiar si querés otra imagen)
-
+    Description: SSM parameter path de la AMI (cambiar para otra imagen)
   GitRawUserDataUrl:
     Type: String
     Default: https://raw.githubusercontent.com/Unahur-Laboratorio/Labo-Cloudformation/main/scripts/user-data.sh
-    Description: URL raw pública del script de User Data en GitHub (no es necesario pasarla por parámetro)
+    Description: URL raw pública del script de User Data en GitHub
 
 Resources:
-  # SG del ALB (HTTP público)
   ALBSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -45,7 +40,6 @@ Resources:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  # SG de EC2 (HTTP solo desde ALB)
   WebSG:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -60,7 +54,6 @@ Resources:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  # ALB público
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -74,36 +67,11 @@ Resources:
       Type: application
       IpAddressType: ipv4
 
-  # Target Group
-  WebTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: !Sub '${AWS::StackName}-tg'
-      VpcId: !Ref VpcId
-      Protocol: HTTP
-      Port: 80
-      TargetType: instance
-      HealthCheckEnabled: true
-      HealthCheckPath: /
-      HealthCheckProtocol: HTTP
-      Matcher: { HttpCode: '200-399' }
-
-  # Listener HTTP → TG
-  HTTPListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref ALB
-      Port: 80
-      Protocol: HTTP
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref WebTargetGroup
-
-  # EC2 #1
+  # EC2 #1 y #2 primero (para poder referenciarlas en Targets)
   WebServer1:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref AmiId            # <-- usar el parámetro AmiId
+      ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
       SubnetId: !Ref Subnet1Id
       SecurityGroupIds: [!Ref WebSG]
@@ -117,11 +85,10 @@ Resources:
           /tmp/user-data.sh
       Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-web1' }]
 
-  # EC2 #2
   WebServer2:
     Type: AWS::EC2::Instance
     Properties:
-      ImageId: !Ref AmiId            # <-- usar el parámetro AmiId
+      ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
       SubnetId: !Ref Subnet2Id
       SecurityGroupIds: [!Ref WebSG]
@@ -135,20 +102,33 @@ Resources:
           /tmp/user-data.sh
       Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-web2' }]
 
-  # Attach al TG
-  AttachWeb1:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroupAttachment
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      TargetGroupArn: !Ref WebTargetGroup
-      TargetId: !Ref WebServer1
+      Name: !Sub '${AWS::StackName}-tg'
+      VpcId: !Ref VpcId
+      Protocol: HTTP
       Port: 80
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      Matcher: { HttpCode: '200-399' }
+      Targets:                                # <<< registra las EC2 aquí
+        - Id: !Ref WebServer1
+          Port: 80
+        - Id: !Ref WebServer2
+          Port: 80
 
-  AttachWeb2:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroupAttachment
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      TargetGroupArn: !Ref WebTargetGroup
-      TargetId: !Ref WebServer2
+      LoadBalancerArn: !Ref ALB
       Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
 
 Outputs:
   ALBDNSName:
